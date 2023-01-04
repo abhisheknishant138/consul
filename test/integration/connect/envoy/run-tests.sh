@@ -17,7 +17,8 @@ export ENVOY_VERSION
 
 export DOCKER_BUILDKIT=1
 # Always run tests on amd64 because that's what the CI environment uses.
-export DOCKER_DEFAULT_PLATFORM="linux/amd64"
+#export DOCKER_DEFAULT_PLATFORM="linux/amd64"
+export DOCKER_DEFAULT_PLATFORM=$(uname -m)
 
 if [ ! -z "$DEBUG" ] ; then
   set -x
@@ -431,6 +432,7 @@ function global_setup {
 }
 
 function wipe_volumes {
+  echo $DOCKER_DEFAULT_PLATFORM
   docker run --rm -i \
     $WORKDIR_SNIPPET \
     --net=none \
@@ -546,11 +548,18 @@ function suite_setup {
     # This is a dummy container that we use to create volume and keep it
     # accessible while other containers are down.
     docker volume create envoy_workdir &>/dev/null
-    docker run -d --name envoy_workdir_1 \
-        $WORKDIR_SNIPPET \
-        --net=none \
-        k8s.gcr.io/pause &>/dev/null
-    # TODO(rb): switch back to "${HASHICORP_DOCKER_PROXY}/google/pause" once that is cached
+    if [[ "$DOCKER_DEFAULT_PLATFORM" == "aarch64" ]]; then
+      docker run -d --name envoy_workdir_1 \
+          $WORKDIR_SNIPPET \
+          --net=none \
+          k8s.gcr.io/pause-arm64:3.3 &>/dev/null
+    else
+      docker run -d --name envoy_workdir_1 \
+          $WORKDIR_SNIPPET \
+          --net=none \
+          k8s.gcr.io/pause:3.3 &>/dev/null
+      # TODO(rb): switch back to "${HASHICORP_DOCKER_PROXY}/google/pause" once that is cached
+    fi
 
     # pre-build the verify container
     echo "Rebuilding 'bats-verify' image..."
@@ -811,12 +820,21 @@ function run_container_fake-statsd {
   # This magic SYSTEM incantation is needed since Envoy doesn't add newlines and so
   # we need each packet to be passed to echo to add a new line before
   # appending.
-  docker run -d --name $(container_name) \
-    $WORKDIR_SNIPPET \
-    $(network_snippet primary) \
-    "${HASHICORP_DOCKER_PROXY}/alpine/socat:1.7.3.4-r1" \
-    -u UDP-RECVFROM:8125,fork,reuseaddr \
-    SYSTEM:'xargs -0 echo >> /workdir/primary/statsd/statsd.log'
+  if [[ "$DOCKER_DEFAULT_PLATFORM" == "aarch64" ]]; then
+    docker run -d --name $(container_name) \
+      $WORKDIR_SNIPPET \
+      $(network_snippet primary) \
+      "${HASHICORP_DOCKER_PROXY}/alpine/socat:1.7.4.4-r0" \
+      -u UDP-RECVFROM:8125,fork,reuseaddr \
+      SYSTEM:'xargs -0 echo >> /workdir/primary/statsd/statsd.log'
+  else
+    docker run -d --name $(container_name) \
+      $WORKDIR_SNIPPET \
+      $(network_snippet primary) \
+      "${HASHICORP_DOCKER_PROXY}/alpine/socat:1.7.3.4-r1" \
+      -u UDP-RECVFROM:8125,fork,reuseaddr \
+      SYSTEM:'xargs -0 echo >> /workdir/primary/statsd/statsd.log'
+  fi
 }
 
 function run_container_zipkin {
@@ -827,11 +845,19 @@ function run_container_zipkin {
 }
 
 function run_container_jaeger {
-  docker run -d --name $(container_name) \
-    $WORKDIR_SNIPPET \
-    $(network_snippet primary) \
-    "${HASHICORP_DOCKER_PROXY}/jaegertracing/all-in-one:1.11" \
-    --collector.zipkin.http-port=9411
+  if [[ "$DOCKER_DEFAULT_PLATFORM" == "aarch64" ]]; then
+    docker run -d --name $(container_name) \
+      $WORKDIR_SNIPPET \
+      $(network_snippet primary) \
+      "${HASHICORP_DOCKER_PROXY}/jaegertracing/all-in-one:1.41" \
+      --collector.zipkin.http-port=9411
+  else
+    docker run -d --name $(container_name) \
+      $WORKDIR_SNIPPET \
+      $(network_snippet primary) \
+      "${HASHICORP_DOCKER_PROXY}/jaegertracing/all-in-one:1.11" \
+      --collector.zipkin.http-port=9411
+  fi
 }
 
 function run_container_test-sds-server {
